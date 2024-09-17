@@ -25,8 +25,6 @@ class Upbit:
 
         self.client.options["defaultType"] = "spot"
 
-    # async def aclose(self):
-    #     await self.spot_async.close()
     def get_ticker(self, symbol: str):
         return self.client.fetch_ticker(symbol)
 
@@ -80,19 +78,51 @@ class Upbit:
         except Exception as e:
             raise error.OrderError(e, order_info)
 
-    def market_buy(self, order_info: MarketOrder):
+    # 지정가 주문 처리
+    def limit_order(self, order_info: MarketOrder):
         from exchange.pexchange import retry
 
-        # 비용주문
+        params = {}
+        try:
+            return retry(
+                self.client.create_order,
+                order_info.unified_symbol,
+                "limit",  # 지정가 주문
+                order_info.side,
+                order_info.amount,
+                order_info.price,  # 지정가 가격 필요
+                params,
+                order_info=order_info,
+                max_attempts=5,
+                instance=self,
+            )
+        except Exception as e:
+            raise error.OrderError(e, order_info)
+
+    # 시장가 매수
+    def market_buy(self, order_info: MarketOrder):
         buy_amount = self.get_amount(order_info)
         order_info.amount = buy_amount
         order_info.price = self.get_price(order_info.unified_symbol)
         return self.market_order(order_info)
 
+    # 시장가 매도
     def market_sell(self, order_info: MarketOrder):
         sell_amount = self.get_amount(order_info)
         order_info.amount = sell_amount
         return self.market_order(order_info)
+
+    # 지정가 매수
+    def limit_buy(self, order_info: MarketOrder):
+        buy_amount = self.get_amount(order_info)
+        order_info.amount = buy_amount
+        return self.limit_order(order_info)
+
+    # 지정가 매도
+    def limit_sell(self, order_info: MarketOrder):
+        sell_amount = self.get_amount(order_info)
+        order_info.amount = sell_amount
+        return self.limit_order(order_info)
 
     def get_order(self, order_id: str):
         return self.client.fetch_order(order_id)

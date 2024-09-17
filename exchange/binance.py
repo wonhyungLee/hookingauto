@@ -174,10 +174,11 @@ class Binance:
         if self.order_info.is_futures:
             self.client.set_leverage(leverage, symbol)
 
+    # 시장가 주문 처리
     def market_order(self, order_info: MarketOrder):
         from exchange.pexchange import retry
 
-        symbol = order_info.unified_symbol  # self.parse_symbol(base, quote)
+        symbol = order_info.unified_symbol
         params = {}
         try:
             return retry(
@@ -196,25 +197,33 @@ class Binance:
         except Exception as e:
             raise error.OrderError(e, self.order_info)
 
-    # async def market_order_async(
-    #     self,
-    #     base: str,
-    #     quote: str,
-    #     type: str,
-    #     side: str,
-    #     amount: float,
-    #     price: float = None,
-    # ):
-    #     symbol = self.parse_symbol(base, quote)
-    #     return await self.spot_async.create_order(
-    #         symbol, type.lower(), side.lower(), amount
-    #     )
+    # 지정가 주문 처리
+    def limit_order(self, order_info: MarketOrder):
+        from exchange.pexchange import retry
+
+        symbol = order_info.unified_symbol
+        params = {}
+        try:
+            return retry(
+                self.client.create_order,
+                symbol,
+                "limit",
+                order_info.side,
+                order_info.amount,
+                order_info.price,  # 지정가 주문에서 가격 필요
+                params,
+                order_info=order_info,
+                max_attempts=5,
+                delay=0.1,
+                instance=self,
+            )
+        except Exception as e:
+            raise error.OrderError(e, self.order_info)
 
     def market_buy(self, order_info: MarketOrder):
-        # 수량기반
+        # 수량 계산
         buy_amount = self.get_amount(order_info)
         order_info.amount = buy_amount
-
         return self.market_order(order_info)
 
     def market_sell(self, order_info: MarketOrder):
@@ -222,32 +231,24 @@ class Binance:
         order_info.amount = sell_amount
         return self.market_order(order_info)
 
-    def market_entry(
-        self,
-        order_info: MarketOrder,
-    ):
+    def limit_buy(self, order_info: MarketOrder):
+        buy_amount = self.get_amount(order_info)
+        order_info.amount = buy_amount
+        return self.limit_order(order_info)
+
+    def limit_sell(self, order_info: MarketOrder):
+        sell_amount = self.get_amount(order_info)
+        order_info.amount = sell_amount
+        return self.limit_order(order_info)
+
+    def market_entry(self, order_info: MarketOrder):
         from exchange.pexchange import retry
 
-        # self.client.options["defaultType"] = "swap"
-        symbol = self.order_info.unified_symbol  # self.parse_symbol(base, quote)
-
+        symbol = self.order_info.unified_symbol
         entry_amount = self.get_amount(order_info)
         if entry_amount == 0:
             raise error.MinAmountError()
-        if self.position_mode == "one-way":
-            params = {}
-        elif self.position_mode == "hedge":
-            if order_info.side == "buy":
-                if order_info.is_entry:
-                    positionSide = "LONG"
-                elif order_info.is_close:
-                    positionSide = "SHORT"
-            elif order_info.side == "sell":
-                if order_info.is_entry:
-                    positionSide = "SHORT"
-                elif order_info.is_close:
-                    positionSide = "LONG"
-            params = {"positionSide": positionSide}
+        params = {}
         if order_info.leverage is not None:
             self.set_leverage(order_info.leverage, symbol)
 
@@ -269,82 +270,12 @@ class Binance:
         except Exception as e:
             raise error.OrderError(e, self.order_info)
 
-    def is_hedge_mode(self):
-        response = self.client.fapiPrivate_get_positionside_dual()
-        if response["dualSidePosition"]:
-            return True
-        else:
-            return False
-
-    def market_sltp_order(
-        self,
-        base: str,
-        quote: str,
-        type: str,
-        side: str,
-        amount: float,
-        stop_price: float,
-        profit_price: float,
-    ):
-        symbol = self.order_info.unified_symbol  # self.parse_symbol(base, quote)
-        inverted_side = (
-            "sell" if side.lower() == "buy" else "buy"
-        )  # buy면 sell, sell이면 buy * 진입 포지션과 반대로 주문 넣어줘 야함
-        self.client.create_order(
-            symbol,
-            "STOP_MARKET",
-            inverted_side,
-            amount,
-            None,
-            {"stopPrice": stop_price, "newClientOrderId": "STOP_MARKET"},
-        )  # STOP LOSS 오더
-        self.client.create_order(
-            symbol,
-            "TAKE_PROFIT_MARKET",
-            inverted_side,
-            amount,
-            None,
-            {"stopPrice": profit_price, "newClientOrderId": "TAKE_PROFIT_MARKET"},
-        )  # TAKE profit 오더
-
-        # response = self.future.private_post_order_oco({
-        #     'symbol': self.future.market(symbol)['id'],
-        #     'side': 'BUY',  # SELL, BUY
-        #     'quantity': self.future.amount_to_precision(symbol, amount),
-        #     'price': self.future.price_to_precision(symbol, profit_price),
-        #     'stopPrice': self.future.price_to_precision(symbol, stop_price),
-        #     # 'stopLimitPrice': self.future.price_to_precision(symbol, stop_limit_price),  # If provided, stopLimitTimeInForce is required
-        #     # 'stopLimitTimeInForce': 'GTC',  # GTC, FOK, IOC
-        #     # 'listClientOrderId': exchange.uuid(),  # A unique Id for the entire orderList
-        #     # 'limitClientOrderId': exchange.uuid(),  # A unique Id for the limit order
-        #     # 'limitIcebergQty': exchangea.amount_to_precision(symbol, limit_iceberg_quantity),
-        #     # 'stopClientOrderId': exchange.uuid()  # A unique Id for the stop loss/stop loss limit leg
-        #     # 'stopIcebergQty': exchange.amount_to_precision(symbol, stop_iceberg_quantity),
-        #     # 'newOrderRespType': 'ACK',  # ACK, RESULT, FULL
-        # })
-
-    def market_close(
-        self,
-        order_info: MarketOrder,
-    ):
+    def market_close(self, order_info: MarketOrder):
         from exchange.pexchange import retry
 
-        symbol = self.order_info.unified_symbol  # self.parse_symbol(base, quote)
+        symbol = self.order_info.unified_symbol
         close_amount = self.get_amount(order_info)
-        if self.position_mode == "one-way":
-            params = {"reduceOnly": True}
-        elif self.position_mode == "hedge":
-            if order_info.side == "buy":
-                if order_info.is_entry:
-                    positionSide = "LONG"
-                elif order_info.is_close:
-                    positionSide = "SHORT"
-            elif order_info.side == "sell":
-                if order_info.is_entry:
-                    positionSide = "SHORT"
-                elif order_info.is_close:
-                    positionSide = "LONG"
-            params = {"positionSide": positionSide}
+        params = {"reduceOnly": True}
 
         try:
             return retry(
@@ -365,7 +296,6 @@ class Binance:
 
     def get_listen_key(self):
         url = "https://fapi.binance.com/fapi/v1/listenKey"
-
         listenkey = httpx.post(
             url, headers={"X-MBX-APIKEY": self.client.apiKey}
         ).json()["listenKey"]

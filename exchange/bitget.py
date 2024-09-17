@@ -134,7 +134,6 @@ class Bitget:
             "symbol": market["id"],
             "marginCoin": market["settleId"],
             "leverage": leverage,
-            # 'holdSide': 'long' or 'short',
         }
 
         account = self.client.privateMixGetAccountAccount(
@@ -144,6 +143,7 @@ class Bitget:
             request |= {"holdSide": hold_side}
         return self.client.privateMixPostAccountSetLeverage(request)
 
+    # 시장가 주문 처리
     def market_order(self, order_info: MarketOrder):
         from exchange.pexchange import retry
 
@@ -166,18 +166,53 @@ class Bitget:
         except Exception as e:
             raise error.OrderError(e, order_info)
 
+    # 지정가 주문 처리
+    def limit_order(self, order_info: MarketOrder):
+        from exchange.pexchange import retry
+
+        symbol = order_info.unified_symbol
+        params = {}
+        try:
+            return retry(
+                self.client.create_order,
+                symbol,
+                "limit",
+                order_info.side,
+                order_info.amount,
+                order_info.price,  # 지정가 가격이 필요함
+                params,
+                order_info=order_info,
+                max_attempts=5,
+                delay=0.1,
+                instance=self,
+            )
+        except Exception as e:
+            raise error.OrderError(e, order_info)
+
+    # 시장가 매수
     def market_buy(self, order_info: MarketOrder):
-        # 비용주문
         buy_amount = self.get_amount(order_info)
         order_info.amount = buy_amount
         order_info.price = self.get_price(order_info.unified_symbol)
-
         return self.market_order(order_info)
 
+    # 시장가 매도
     def market_sell(self, order_info: MarketOrder):
         sell_amount = self.get_amount(order_info)
         order_info.amount = sell_amount
         return self.market_order(order_info)
+
+    # 지정가 매수
+    def limit_buy(self, order_info: MarketOrder):
+        buy_amount = self.get_amount(order_info)
+        order_info.amount = buy_amount
+        return self.limit_order(order_info)
+
+    # 지정가 매도
+    def limit_sell(self, order_info: MarketOrder):
+        sell_amount = self.get_amount(order_info)
+        order_info.amount = sell_amount
+        return self.limit_order(order_info)
 
     def market_entry(self, order_info: MarketOrder):
         from exchange.pexchange import retry
@@ -207,7 +242,6 @@ class Bitget:
                 delay=0.1,
                 instance=self,
             )
-
         except Exception as e:
             raise error.OrderError(e, order_info)
 
@@ -235,7 +269,6 @@ class Bitget:
                 delay=0.1,
                 instance=self,
             )
-
             return result
         except Exception as e:
             raise error.OrderError(e, self.order_info)
